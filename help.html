@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U8 下载工具帮助文档</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            text-align: center;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+        }
+        
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            padding-left: 10px;
+            border-left: 4px solid #3498db;
+        }
+        
+        h3 {
+            color: #7f8c8d;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+        
+        .command-container {
+            margin: 15px 0;
+            position: relative;
+        }
+        
+        .command {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-bottom: 5px;
+        }
+        
+        .copy-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .copy-btn:hover {
+            background-color: #2980b9;
+        }
+        
+        .copy-btn.copied {
+            background-color: #27ae60;
+        }
+        
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        
+        .params-table th, .params-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        
+        .params-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        
+        .params-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        
+        .example {
+            background-color: #f0f8ff;
+            border-left: 4px solid #1e90ff;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        
+        .note {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 15px 0;
+            color: #856404;
+        }
+        
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 15px 0;
+            color: #155724;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                padding: 15px;
+            }
+            
+            .copy-btn {
+                position: static;
+                display: block;
+                margin-top: 5px;
+                width: 100%;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>M3U8 下载工具帮助文档</h1>
+        
+        <h2>工具介绍</h2>
+        <p>M3U8 下载工具是一个多线程的命令行工具，用于下载 M3U8 格式的视频播放列表并将其合并为 MP4 文件。该工具支持以下功能：</p>
+        <ul>
+            <li>多线程并行下载，提高下载速度</li>
+            <li>支持多个 M3U8 URL 同时下载</li>
+            <li>为每个 URL 指定单独的输出文件名</li>
+            <li>实时显示下载进度和速度</li>
+            <li>自动清理临时文件</li>
+            <li>支持从文件读取任务列表</li>
+        </ul>
+        
+        <h2>基本命令格式</h2>
+        <div class="command-container">
+            <div class="command">m3u8-downloader.exe [参数] [URL1] [输出文件1] [URL2] [输出文件2] ...</div>
+            <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+        </div>
+        
+        <h2>命令示例</h2>
+        
+        <h3>1. 下载单个 M3U8 播放列表</h3>
+        <div class="command-container">
+            <div class="command">m3u8-downloader.exe -threads 10 "https://example.com/playlist.m3u8" "output.mp4"</div>
+            <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+        </div>
+        
+        <h3>2. 下载多个 M3U8 播放列表</h3>
+        <div class="command-container">
+            <div class="command">m3u8-downloader.exe -threads 10 "https://example.com/playlist1.m3u8" "video1.mp4" "https://example.com/playlist2.m3u8" "video2.mp4"</div>
+            <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+        </div>
+        
+        <h3>3. 使用默认命名规则</h3>
+        <div class="command-container">
+            <div class="command">m3u8-downloader.exe -output "video.mp4" -threads 10 "https://example.com/playlist1.m3u8" "https://example.com/playlist2.m3u8"</div>
+            <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+        </div>
+        <p class="note">这会生成 video_1.mp4 和 video_2.mp4</p>
+        
+        <h3>4. 从文件读取任务列表</h3>
+        <div class="command-container">
+            <div class="command">m3u8-downloader.exe -file "tasks.txt" -threads 5</div>
+            <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+        </div>
+        
+        <div class="example">
+            <h4>tasks.txt 文件格式示例：</h4>
+            <div class="command-container">
+                <div class="command">https://example.com/playlist1.m3u8,video1.mp4
+https://example.com/playlist2.m3u8,video2.mp4
+https://example.com/playlist3.m3u8,video3.mp4</div>
+                <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+            </div>
+        </div>
+        
+        <h2>参数说明</h2>
+        <table class="params-table">
+            <tr>
+                <th>参数</th>
+                <th>说明</th>
+                <th>默认值</th>
+            </tr>
+            <tr>
+                <td>-threads</td>
+                <td>下载线程数</td>
+                <td>10</td>
+            </tr>
+            <tr>
+                <td>-output</td>
+                <td>默认输出文件名（当未指定具体输出文件名时使用）</td>
+                <td>output.mp4</td>
+            </tr>
+            <tr>
+                <td>-temp</td>
+                <td>临时文件目录</td>
+                <td>temp</td>
+            </tr>
+            <tr>
+                <td>-file</td>
+                <td>包含任务列表的文件路径（格式：URL,output.mp4）</td>
+                <td>无</td>
+            </tr>
+        </table>
+        
+        <h2>常见问题</h2>
+        
+        <h3>1. 下载失败，显示 "unexpected EOF" 错误</h3>
+        <p>这通常是由于网络连接不稳定或服务器响应不完整导致的。建议：</p>
+        <ul>
+            <li>检查网络连接是否稳定</li>
+            <li>尝试减少线程数，避免网络拥塞</li>
+            <li>重新运行命令，可能会成功下载</li>
+        </ul>
+        
+        <h3>2. 下载失败，显示 "status code 404" 错误</h3>
+        <p>这表示 M3U8 URL 不存在或已经失效。建议：</p>
+        <ul>
+            <li>检查 URL 是否正确</li>
+            <li>确认 URL 格式是否正确，例如是否需要添加前缀 0（如 001 而不是 1）</li>
+            <li>尝试使用其他有效的 M3U8 URL</li>
+        </ul>
+        
+        <h3>3. 下载速度很慢</h3>
+        <p>建议：</p>
+        <ul>
+            <li>增加线程数（如 -threads 20）</li>
+            <li>检查网络连接速度</li>
+            <li>确认服务器是否限制了下载速度</li>
+        </ul>
+        
+        <h3>4. 生成的 MP4 文件无法播放</h3>
+        <p>这可能是由于下载过程中出现错误或合并失败导致的。建议：</p>
+        <ul>
+            <li>确保所有片段都成功下载</li>
+            <li>检查 FFmpeg 是否正确安装（工具会优先使用 FFmpeg 合并）</li>
+            <li>重新运行命令，确保下载过程不中断</li>
+        </ul>
+        
+        <h2>使用技巧</h2>
+        <ul>
+            <li>对于大型视频，建议使用较多的线程数（如 15-20）以提高下载速度</li>
+            <li>对于网络不稳定的情况，建议使用较少的线程数（如 5-10）以提高稳定性</li>
+            <li>使用 -file 参数可以方便地批量下载多个视频</li>
+            <li>确保目标目录有足够的磁盘空间</li>
+        </ul>
+        
+        <div class="success">
+            <p><strong>提示：</strong>点击命令右侧的 "复制" 按钮可以快速复制命令到剪贴板，然后在命令提示符或 PowerShell 中粘贴使用。</p>
+        </div>
+    </div>
+    
+    <script>
+        function copyToClipboard(button) {
+            const commandDiv = button.previousElementSibling;
+            const commandText = commandDiv.textContent;
+            
+            navigator.clipboard.writeText(commandText).then(function() {
+                // 显示复制成功
+                button.textContent = "已复制";
+                button.classList.add("copied");
+                
+                // 2秒后恢复按钮状态
+                setTimeout(function() {
+                    button.textContent = "复制";
+                    button.classList.remove("copied");
+                }, 2000);
+            }).catch(function(err) {
+                console.error('复制失败:', err);
+                button.textContent = "复制失败";
+                
+                setTimeout(function() {
+                    button.textContent = "复制";
+                }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>

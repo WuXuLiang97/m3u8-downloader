@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -171,22 +170,22 @@ func init() {
 func main() {
 	fmt.Println("M3U8 Downloader v2.0 (Optimized)")
 	fmt.Printf("Threads: %d\n", threads)
-	fmt.Printf("Temp dir: %s\n\n", tempDir)
+	fmt.Printf("Output dir: %s\n\n", tempDir)
 
-	// 确保临时目录存在（保留原逻辑）
+	// 确保输出目录存在
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		log.Fatalf("Failed to create temp directory: %v", err)
+		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
-	// 处理每个任务（保留原逻辑，优化临时文件清理）
+	// 处理每个任务
 	for i, task := range tasks {
 		fmt.Printf("=== Task %d of %d ===\n", i+1, len(tasks))
 		fmt.Printf("Downloading: %s\n", task.URL)
 
-		// 生成输出文件名（保留原逻辑）
-		var taskOutputFile string
+		// 生成输出目录名
+		var taskDirName string
 		if task.Output != "" {
-			taskOutputFile = task.Output
+			taskDirName = task.Output
 		} else {
 			taskURL := task.URL
 			baseName := ""
@@ -210,55 +209,47 @@ func main() {
 			if baseName == "" {
 				baseName = fmt.Sprintf("output_%d", i+1)
 			}
-			taskOutputFile = baseName + ".mp4"
+			taskDirName = baseName
 		}
-		fmt.Printf("Output: %s\n\n", taskOutputFile)
+		fmt.Printf("Output directory: %s\n\n", filepath.Join(tempDir, taskDirName))
 
-		// 步骤1: 解析 m3u8 播放列表（保留原逻辑）
-		fmt.Println("Step 1: Parsing M3U8 playlist...")
-		tsFiles, err := parseM3U8(task.URL)
+		// 创建任务专用目录
+		taskDir := filepath.Join(tempDir, taskDirName)
+		if err := os.MkdirAll(taskDir, 0755); err != nil {
+			fmt.Printf("Failed to create task directory: %v\n\n", err)
+			continue
+		}
+
+		// 步骤1: 解析 m3u8 播放列表并保存
+		fmt.Println("Step 1: Parsing and saving M3U8 playlist...")
+		tsFiles, err := parseM3U8AndSave(task.URL, filepath.Join(taskDir, "playlist.m3u8"))
 		if err != nil {
 			fmt.Printf("Failed to parse M3U8: %v\n\n", err)
 			continue
 		}
 		fmt.Printf("Found %d .ts files\n\n", len(tsFiles))
 
-		// 步骤2: 多线程下载 .ts 片段（优化核心逻辑）
+		// 步骤2: 多线程下载 .ts 片段
 		fmt.Println("Step 2: Downloading .ts segments...")
-		tsLocalFiles, err := downloadSegments(tsFiles, threads)
+		tsLocalFiles, err := downloadSegmentsToDir(tsFiles, threads, taskDir)
 		if err != nil {
 			fmt.Printf("Failed to download segments: %v\n\n", err)
 			continue
 		}
 		fmt.Println("\nAll segments downloaded successfully\n")
 
-		// 步骤3: 合并 .ts 片段为 MP4（保留原逻辑）
-		fmt.Println("Step 3: Merging segments into MP4...")
-		if err := mergeSegments(tsLocalFiles, taskOutputFile); err != nil {
-			fmt.Printf("Failed to merge segments: %v\n\n", err)
-			continue
+		// 步骤3: 更新本地M3U8列表文件，使用相对路径
+		fmt.Println("Step 3: Updating local M3U8 playlist...")
+		if err := updateLocalM3U8(filepath.Join(taskDir, "playlist.m3u8"), tsLocalFiles); err != nil {
+			fmt.Printf("Failed to update local M3U8: %v\n\n", err)
 		}
-		fmt.Printf("Successfully merged into: %s\n\n", taskOutputFile)
-
-		// 步骤4: 清理临时文件（优化：遍历删除TS文件，保留目录，避免重建）
-		fmt.Println("Step 4: Cleaning up temporary files...")
-		if err := cleanTempFiles(tempDir); err != nil {
-			fmt.Printf("Warning: Failed to clean up temp files: %v\n", err)
-		} else {
-			fmt.Println("Cleanup completed")
-		}
-		fmt.Println()
+		fmt.Println("Local M3U8 playlist updated successfully\n")
 	}
 
-	// 最终删除临时目录（所有任务完成后）
-	if err := os.RemoveAll(tempDir); err != nil {
-		fmt.Printf("Warning: Failed to delete temp directory: %v\n", err)
-	}
-
-	fmt.Println("All tasks completed!")
+	fmt.Println("All tasks completed! TS segments and M3U8 playlists are preserved in:", tempDir)
 }
 
-// parseM3U8 解析 m3u8 播放列表（保留原逻辑，复用全局HTTP客户端）
+// parseM3U8 解析 m3u8 播放列表
 func parseM3U8(m3u8URL string) ([]string, error) {
 	resp, err := httpClient.Get(m3u8URL)
 	if err != nil {
@@ -305,18 +296,71 @@ func parseM3U8(m3u8URL string) ([]string, error) {
 	return tsURLs, nil
 }
 
-// downloadSegments 多线程下载 .ts 片段（核心优化：连接池、原子计数、锁粒度优化）
-func downloadSegments(urls []string, threadCount int) ([]string, error) {
+// parseM3U8AndSave 解析 m3u8 播放列表并保存到文件
+func parseM3U8AndSave(m3u8URL string, savePath string) ([]string, error) {
+	resp, err := httpClient.Get(m3u8URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download m3u8 file: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download m3u8 file: status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read m3u8 file: %v", err)
+	}
+
+	// 保存原始M3U8文件
+	if err := os.WriteFile(savePath, body, 0644); err != nil {
+		return nil, fmt.Errorf("failed to save m3u8 file: %v", err)
+	}
+
+	// 解析TS文件URLs
+	content := string(body)
+	lines := strings.Split(content, "\n")
+	var tsURLs []string
+	baseURL, err := url.Parse(m3u8URL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid m3u8 URL: %v", err)
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		tsURL, err := url.Parse(line)
+		if err != nil {
+			continue
+		}
+		if !tsURL.IsAbs() {
+			tsURL = baseURL.ResolveReference(tsURL)
+		}
+		tsURLs = append(tsURLs, tsURL.String())
+	}
+
+	if len(tsURLs) == 0 {
+		return nil, fmt.Errorf("no .ts files found in m3u8 playlist")
+	}
+
+	return tsURLs, nil
+}
+
+// downloadSegmentsToDir 多线程下载 .ts 片段到指定目录
+func downloadSegmentsToDir(urls []string, threadCount int, outputDir string) ([]string, error) {
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
 	var errors []error
 
-	// 限制最大线程数（保留原逻辑）
+	// 限制最大线程数
 	if threadCount > len(urls) {
 		threadCount = len(urls)
 	}
 
-	// 初始化下载统计：一次性赋值，无需遍历
+	// 初始化下载统计
 	downloadStats = DownloadStats{
 		Total:     int64(len(urls)),
 		Completed: 0,
@@ -324,17 +368,17 @@ func downloadSegments(urls []string, threadCount int) ([]string, error) {
 		StartTime: time.Now(),
 	}
 
-	// 创建任务通道（保留原逻辑）
+	// 创建任务通道
 	taskChan := make(chan int, len(urls))
 	for i := range urls {
 		taskChan <- i
 	}
 	close(taskChan)
 
-	// 存储本地文件路径（保留原逻辑）
+	// 存储本地文件路径
 	localFiles := make([]string, len(urls))
 
-	// 启动线程（优化：锁粒度降低，进度条仅在完成后更新）
+	// 启动线程
 	fmt.Printf("Starting %d download threads...\n", threadCount)
 	for i := 0; i < threadCount; i++ {
 		wg.Add(1)
@@ -342,52 +386,88 @@ func downloadSegments(urls []string, threadCount int) ([]string, error) {
 			defer wg.Done()
 			for idx := range taskChan {
 				url := urls[idx]
-				localFile := filepath.Join(tempDir, fmt.Sprintf("segment_%05d.ts", idx))
+				localFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", idx))
 
-				// 下载文件（复用全局客户端）
+				// 下载文件
 				if err := downloadFile(url, localFile); err != nil {
 					mutex.Lock()
 					errors = append(errors, fmt.Errorf("segment %d: %v", idx, err))
 					mutex.Unlock()
 					fmt.Printf("\nThread %d error: %v\n", threadID, err)
-					continue
+					// 继续尝试下一个片段
+				} else {
+					// 仅更新本地文件路径，无锁
+					localFiles[idx] = localFile
+					// 更新统计并显示进度条
+					downloadStats.Mutex.Lock()
+					downloadStats.Completed++
+					downloadStats.Mutex.Unlock()
+					displayProgressBar()
 				}
-
-				// 仅更新本地文件路径，无锁
-				localFiles[idx] = localFile
-				// 更新统计并显示进度条（加锁仅统计，无遍历）
-				downloadStats.Mutex.Lock()
-				downloadStats.Completed++
-				downloadStats.Mutex.Unlock()
-				displayProgressBar()
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	// 下载完成后强制刷新进度条为100%
+	// 下载完成后显示最终进度
 	downloadStats.Mutex.Lock()
 	downloadStats.Completed = downloadStats.Total
 	downloadStats.Mutex.Unlock()
 	displayProgressBar()
 
-	// 检查错误（保留原逻辑）
+	// 检查错误
 	if len(errors) > 0 {
-		return nil, fmt.Errorf("download errors: %v", errors)
+		// 过滤出成功下载的文件
+		var validFiles []string
+		for _, f := range localFiles {
+			if f != "" {
+				validFiles = append(validFiles, f)
+			}
+		}
+
+		if len(validFiles) == 0 {
+			return nil, fmt.Errorf("all segments failed to download: %v", errors)
+		}
+
+		fmt.Printf("\nWarning: %d segments failed to download, but %d succeeded\n", len(errors), len(validFiles))
+		return validFiles, nil
 	}
 
-	// 过滤空文件路径（保留原逻辑）
-	var validFiles []string
-	for _, f := range localFiles {
-		if f != "" {
-			validFiles = append(validFiles, f)
+	// 所有文件都成功下载
+	return localFiles, nil
+}
+
+// updateLocalM3U8 更新本地M3U8文件，使用相对路径
+func updateLocalM3U8(m3u8Path string, tsFiles []string) error {
+	// 读取原始M3U8文件
+	originalContent, err := os.ReadFile(m3u8Path)
+	if err != nil {
+		return fmt.Errorf("failed to read m3u8 file: %v", err)
+	}
+
+	lines := strings.Split(string(originalContent), "\n")
+	var updatedLines []string
+	segmentIndex := 0
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || line == "" {
+			updatedLines = append(updatedLines, line)
+		} else if segmentIndex < len(tsFiles) {
+			// 替换为本地相对路径
+			relPath := filepath.Base(tsFiles[segmentIndex])
+			updatedLines = append(updatedLines, relPath)
+			segmentIndex++
 		}
 	}
-	if len(validFiles) != len(urls) {
-		return nil, fmt.Errorf("some segments failed to download")
+
+	// 写入更新后的内容
+	updatedContent := strings.Join(updatedLines, "\n")
+	if err := os.WriteFile(m3u8Path, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write updated m3u8 file: %v", err)
 	}
 
-	return validFiles, nil
+	return nil
 }
 
 // downloadFile 下载单个文件（核心优化：复用全局HTTP客户端、复用互斥锁、无冗余创建、添加重试机制）
@@ -407,7 +487,7 @@ func downloadFile(url, filePath string) error {
 			return err
 		}
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("status code %d", resp.StatusCode)
 			if attempt < maxRetries {
@@ -452,106 +532,4 @@ func downloadFile(url, filePath string) error {
 	}
 
 	return lastErr
-}
-
-// mergeSegments 合并 .ts 片段为 MP4 文件（保留原逻辑）
-func mergeSegments(tsFiles []string, outputPath string) error {
-	if err := checkFFmpeg(); err != nil {
-		fmt.Println("Warning: FFmpeg not found, using simple file concatenation")
-		return mergeSegmentsSimple(tsFiles, outputPath)
-	}
-	return mergeSegmentsWithFFmpeg(tsFiles, outputPath)
-}
-
-// checkFFmpeg 检查 FFmpeg 是否可用（保留原逻辑）
-func checkFFmpeg() error {
-	cmd := exec.Command("ffmpeg", "-version")
-	_, err := cmd.CombinedOutput()
-	return err
-}
-
-// mergeSegmentsWithFFmpeg 使用 FFmpeg 合并 .ts 片段（保留原逻辑）
-func mergeSegmentsWithFFmpeg(tsFiles []string, outputPath string) error {
-	listFile := filepath.Join(tempDir, "filelist.txt")
-	file, err := os.Create(listFile)
-	if err != nil {
-		return fmt.Errorf("failed to create filelist.txt: %v", err)
-	}
-	defer file.Close()
-
-	for _, tsFile := range tsFiles {
-		absPath, err := filepath.Abs(tsFile)
-		if err != nil {
-			return fmt.Errorf("failed to get absolute path: %v", err)
-		}
-		fmt.Fprintf(file, "file '%s'\n", absPath)
-	}
-
-	cmd := exec.Command(
-		"ffmpeg",
-		"-f", "concat",
-		"-safe", "0",
-		"-i", listFile,
-		"-c", "copy",
-		"-bsf:a", "aac_adtstoasc",
-		"-y", // 新增：覆盖已存在的输出文件，无需手动删除
-		outputPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ffmpeg failed: %v\noutput: %s", err, string(output))
-	}
-
-	return nil
-}
-
-// mergeSegmentsSimple 简单合并 .ts 片段（保留原逻辑，优化进度条）
-func mergeSegmentsSimple(tsFiles []string, outputPath string) error {
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %v", err)
-	}
-	defer outFile.Close()
-
-	for i, tsFile := range tsFiles {
-		// 简化合并进度统计
-		progress := float64(i+1) / float64(len(tsFiles))
-		filled := int(progress * 50)
-		bar := fmt.Sprintf("[%s>%s]", strings.Repeat("=", filled), strings.Repeat(" ", 50-filled-1))
-		fmt.Printf("\rMerging: %s %d%%", bar, int(progress*100))
-
-		inFile, err := os.Open(tsFile)
-		if err != nil {
-			return fmt.Errorf("failed to open ts file %s: %v", tsFile, err)
-		}
-		defer inFile.Close()
-
-		if _, err := io.Copy(outFile, inFile); err != nil {
-			return fmt.Errorf("failed to copy ts file %s: %v", tsFile, err)
-		}
-	}
-	fmt.Println()
-	return nil
-}
-
-// cleanTempFiles 优化的临时文件清理：仅删除TS/列表文件，保留目录（避免重建）
-func cleanTempFiles(tempDir string) error {
-	// 遍历临时目录，仅删除.ts和.txt文件
-	files, err := os.ReadDir(tempDir)
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		ext := filepath.Ext(file.Name())
-		if ext == ".ts" || ext == ".txt" {
-			if err := os.Remove(filepath.Join(tempDir, file.Name())); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

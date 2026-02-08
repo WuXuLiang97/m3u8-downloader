@@ -498,10 +498,10 @@ func updateLocalM3U8(m3u8Path string, tsFiles []string) error {
 	return nil
 }
 
-// downloadFile 核心修复：失败清理空文件+关闭所有响应体+传递局部stats+重试机制
+// downloadFile 核心修复：失败清理空文件+关闭所有响应体+传递局部stats+重试机制+文件完整性验证
 func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
-	const maxRetries = 3               // 最大重试次数
-	const retryDelay = 2 * time.Second // 重试基础延迟（指数退避）
+	const maxRetries = 10               // 最大重试次数
+	const retryDelay = 5 * time.Second // 重试基础延迟（指数退避）
 
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -527,6 +527,12 @@ func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
 			}
 			_ = os.Remove(filePath) // 最终失败，清理空文件
 			return lastErr
+		}
+
+		// 获取 Content-Length 用于验证
+		contentLength := int64(0)
+		if cl := resp.Header.Get("Content-Length"); cl != "" {
+			fmt.Sscanf(cl, "%d", &contentLength)
 		}
 
 		// 创建本地文件（存在则覆盖，权限0644）
@@ -555,6 +561,28 @@ func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
 				continue
 			}
 			_ = os.Remove(filePath) // 最终失败，清理损坏/空文件
+			return lastErr
+		}
+
+		// 验证下载完整性：检查实际下载字节数与 Content-Length 是否匹配
+		if contentLength > 0 && bytesCopied != contentLength {
+			lastErr = fmt.Errorf("attempt %d: incomplete download: expected %d bytes, got %d bytes", attempt, contentLength, bytesCopied)
+			if attempt < maxRetries {
+				time.Sleep(retryDelay * time.Duration(attempt))
+				continue
+			}
+			_ = os.Remove(filePath) // 最终失败，清理不完整文件
+			return lastErr
+		}
+
+		// 验证文件是否为空
+		if bytesCopied == 0 {
+			lastErr = fmt.Errorf("attempt %d: empty file downloaded", attempt)
+			if attempt < maxRetries {
+				time.Sleep(retryDelay * time.Duration(attempt))
+				continue
+			}
+			_ = os.Remove(filePath) // 最终失败，清理空文件
 			return lastErr
 		}
 

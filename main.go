@@ -174,16 +174,11 @@ func main() {
 	fmt.Printf("📌 Threads: %d\n", threads)
 	fmt.Printf("📌 Temp Directory: %s\n\n", tempDir)
 
-	// 清空临时目录，避免之前的文件混入
-	if err := os.RemoveAll(tempDir); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Failed to clean temp directory: %v\n", err)
-	}
-
-	// 重新创建临时目录
+	// 创建临时目录（如果不存在）
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		log.Fatalf("❌ Failed to create temp directory: %v", err)
 	}
-	fmt.Println("✅ Temp directory cleaned and recreated\n")
+	fmt.Println("✅ Temp directory ready\n")
 
 	// 处理每个下载任务（保留原任务遍历逻辑，优化日志输出）
 	for taskIdx, task := range tasks {
@@ -338,7 +333,17 @@ func parseTSURLsFromM3U8Content(content, m3u8URL string) ([]string, error) {
 	return tsURLs, nil
 }
 
-// downloadSegmentsToDir 多线程下载TS片段（核心修复：局部stats，独立进度条协程）
+// isFileComplete 检查文件是否已存在且完整
+func isFileComplete(filePath string) bool {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return false
+	}
+	// 检查文件大小是否大于0
+	return info.Size() > 0
+}
+
+// downloadSegmentsToDir 多线程下载TS片段（核心修复：局部stats，独立进度条协程，支持增量下载）
 func downloadSegmentsToDir(urls []string, threadCount int, outputDir string) ([]string, error) {
 	var wg sync.WaitGroup
 	var errMutex sync.Mutex // 保护errors切片的互斥锁
@@ -352,9 +357,18 @@ func downloadSegmentsToDir(urls []string, threadCount int, outputDir string) ([]
 		threadCount = 1
 	}
 
+	// 统计需要下载的文件数
+	var needDownloadCount int64
+	for i := range urls {
+		tsLocalFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", i))
+		if !isFileComplete(tsLocalFile) {
+			needDownloadCount++
+		}
+	}
+
 	// 核心修复：局部DownloadStats，彻底隔离多任务统计数据
 	stats := &DownloadStats{
-		Total:     int64(len(urls)),
+		Total:     needDownloadCount,
 		Completed: 0,
 		BytesDown: 0,
 		StartTime: time.Now(),
@@ -377,46 +391,61 @@ func downloadSegmentsToDir(urls []string, threadCount int, outputDir string) ([]
 		}
 	}()
 
-	// 创建任务通道：缓冲大小为URL数，避免协程阻塞
+	// 创建任务通道：缓冲大小为需要下载的文件数，避免协程阻塞
 	taskChan := make(chan int, len(urls))
 	for i := range urls {
-		taskChan <- i
+		tsLocalFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", i))
+		// 只添加需要下载的文件到任务通道
+		if !isFileComplete(tsLocalFile) {
+			taskChan <- i
+		}
 	}
 	close(taskChan)
 
 	// 存储本地TS文件路径（按URL索引对应，保证顺序）
 	localFiles := make([]string, len(urls))
-
-	// 启动多线程下载协程
-	fmt.Printf("🚀 Starting %d download threads (total %d segments)...\n", threadCount, len(urls))
-	for i := 0; i < threadCount; i++ {
-		wg.Add(1)
-		go func(threadID int) {
-			defer wg.Done()
-			for idx := range taskChan {
-				tsURL := urls[idx]
-				// TS片段命名：segment_00000.ts，保证字典序和播放顺序
-				tsLocalFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", idx))
-				// 下载单个TS片段：传递局部stats，更新统计
-				if err := downloadFile(tsURL, tsLocalFile, stats); err != nil {
-					errMutex.Lock()
-					errors = append(errors, fmt.Errorf("segment %d: %v", idx, err))
-					errMutex.Unlock()
-					fmt.Fprintf(os.Stderr, "\n⚠️  Thread %d: %v\n", threadID, err)
-				} else {
-					// 下载成功，记录本地路径
-					localFiles[idx] = tsLocalFile
-					// 更新已完成片段数（线程安全）
-					stats.Mutex.Lock()
-					stats.Completed++
-					stats.Mutex.Unlock()
-				}
-			}
-		}(i)
+	// 先填充已存在的文件路径
+	for i := range urls {
+		tsLocalFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", i))
+		if isFileComplete(tsLocalFile) {
+			localFiles[i] = tsLocalFile
+		}
 	}
 
-	// 等待所有协程完成
-	wg.Wait()
+	// 启动多线程下载协程
+	if needDownloadCount > 0 {
+		fmt.Printf("🚀 Starting %d download threads (total %d segments, %d need download)...\n", threadCount, len(urls), needDownloadCount)
+		for i := 0; i < threadCount; i++ {
+			wg.Add(1)
+			go func(threadID int) {
+				defer wg.Done()
+				for idx := range taskChan {
+					tsURL := urls[idx]
+					// TS片段命名：segment_00000.ts，保证字典序和播放顺序
+					tsLocalFile := filepath.Join(outputDir, fmt.Sprintf("segment_%05d.ts", idx))
+					// 下载单个TS片段：传递局部stats，更新统计
+					if err := downloadFile(tsURL, tsLocalFile, stats); err != nil {
+						errMutex.Lock()
+						errors = append(errors, fmt.Errorf("segment %d: %v", idx, err))
+						errMutex.Unlock()
+						fmt.Fprintf(os.Stderr, "\n⚠️  Thread %d: %v\n", threadID, err)
+					} else {
+						// 下载成功，记录本地路径
+						localFiles[idx] = tsLocalFile
+						// 更新已完成片段数（线程安全）
+						stats.Mutex.Lock()
+						stats.Completed++
+						stats.Mutex.Unlock()
+					}
+				}
+			}(i)
+		}
+
+		// 等待所有协程完成
+		wg.Wait()
+	} else {
+		fmt.Println("✅ All segments already exist, skipping download")
+	}
 
 	// 下载完成：刷新最终进度，强制100%，并换行（避免覆盖后续输出）
 	stats.Mutex.Lock()
@@ -500,7 +529,7 @@ func updateLocalM3U8(m3u8Path string, tsFiles []string) error {
 
 // downloadFile 核心修复：失败清理空文件+关闭所有响应体+传递局部stats+重试机制+文件完整性验证
 func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
-	const maxRetries = 10               // 最大重试次数
+	const maxRetries = 10              // 最大重试次数
 	const retryDelay = 5 * time.Second // 重试基础延迟（指数退避）
 
 	var lastErr error

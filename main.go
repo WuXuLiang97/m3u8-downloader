@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,16 +40,22 @@ type DownloadStats struct {
 	Mutex     sync.Mutex // 统计信息的互斥锁
 }
 
-// 全局HTTP客户端：保留原连接池优化，复用连接避免资源浪费
+// 全局HTTP客户端：优化连接池配置，提高下载速度
 var httpClient = &http.Client{
 	Transport: &http.Transport{
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   20,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
+		MaxIdleConns:        100,              // 最大空闲连接数
+		MaxIdleConnsPerHost: 20,               // 单主机最大空闲连接数（避免服务器限制）
+		MaxConnsPerHost:     20,               // 单主机最大连接数（避免服务器限制）
+		IdleConnTimeout:     90 * time.Second, // 空闲连接超时时间
+		TLSHandshakeTimeout: 10 * time.Second,
+		DisableCompression:  false, // 启用压缩
+		ForceAttemptHTTP2:   true,  // 启用 HTTP/2
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 	},
-	Timeout: 30 * time.Second,
+	Timeout: 60 * time.Second, // 总超时时间
 }
 
 // displayProgressBar 带参数的进度条函数（修复：隔离多任务统计，100ms实时刷新）
@@ -263,7 +271,7 @@ func parseM3U8(m3u8URL string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return nil, fmt.Errorf("status code %d", resp.StatusCode)
 	}
 
@@ -283,7 +291,7 @@ func parseM3U8AndSave(m3u8URL string, savePath string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return nil, fmt.Errorf("status code %d", resp.StatusCode)
 	}
 
@@ -529,13 +537,38 @@ func updateLocalM3U8(m3u8Path string, tsFiles []string) error {
 
 // downloadFile 核心修复：失败清理空文件+关闭所有响应体+传递局部stats+重试机制+文件完整性验证
 func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
-	const maxRetries = 10              // 最大重试次数
-	const retryDelay = 5 * time.Second // 重试基础延迟（指数退避）
+	const maxRetries = 5               // 最大重试次数
+	const retryDelay = 1 * time.Second // 重试基础延迟（指数退避）
 
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// 创建HTTP请求，添加请求头
+		req, err := http.NewRequest("GET", tsURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d: create request failed: %v", attempt, err)
+			if attempt < maxRetries {
+				time.Sleep(retryDelay * time.Duration(attempt))
+				continue
+			}
+			_ = os.Remove(filePath)
+			return lastErr
+		}
+
+		// 添加请求头，模拟浏览器行为
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		req.Header.Set("Connection", "keep-alive")
+
+		// 动态设置Referer，根据TS URL的域名
+		if tsParsedURL, err := url.Parse(tsURL); err == nil {
+			referer := tsParsedURL.Scheme + "://" + tsParsedURL.Host + "/"
+			req.Header.Set("Referer", referer)
+		}
+
 		// 发起HTTP请求（复用全局连接池）
-		resp, err := httpClient.Get(tsURL)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("attempt %d: get failed: %v", attempt, err)
 			if attempt < maxRetries {
@@ -577,8 +610,10 @@ func downloadFile(tsURL, filePath string, stats *DownloadStats) error {
 			return lastErr
 		}
 
-		// 写入文件内容：直接拷贝响应体到文件
-		bytesCopied, err := io.Copy(file, resp.Body)
+		// 写入文件内容：使用缓冲写入提高性能
+		bufWriter := bufio.NewWriter(file)
+		bytesCopied, err := io.Copy(bufWriter, resp.Body)
+		bufWriter.Flush()
 		// 修复：优先关闭所有资源，再处理错误（避免资源泄漏）
 		_ = file.Close()
 		resp.Body.Close()

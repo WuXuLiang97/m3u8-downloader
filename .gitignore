@@ -1,4 +1,16 @@
 # FFmpeg工具
 ffmpeg/
 
+# 临时文件
 temp/
+hls/
+
+# 编辑器配置
+.vscode/
+
+# 生成的文件
+*.exe
+go.sum
+
+# 其他临时文件
+1.txt
